@@ -23,13 +23,14 @@ func NewShortenHandler(svc service.ShortenServiceI) ShortenHandlerI {
 }
 
 func (h *ShortenHandler) Get(ctx *gin.Context) {
-	var url string
 	urlCtx, _ := ctx.Get("url")
-	url, _ = urlCtx.(string)
+	url, _ := urlCtx.(string)
 
-	var userID string
 	userIDCtx, _ := ctx.Get("userID")
-	userID, _ = userIDCtx.(string)
+	userID, _ := userIDCtx.(string)
+
+	needBypassCtx, _ := ctx.Get("need_bypass")
+	needBypass, _ := needBypassCtx.(bool)
 
 	timeoutCtx, cancel := timeout.NewCtxTimeout()
 	defer cancel()
@@ -41,7 +42,9 @@ func (h *ShortenHandler) Get(ctx *gin.Context) {
 		response.NewJSONResErr(ctx, http.StatusInternalServerError, "", errReq.Error())
 		return
 	}
-	req.Header.Add("user-id", userID)
+	if !needBypass {
+		req.Header.Add("user-id", userID)
+	}
 
 	resp, errResp := http.DefaultClient.Do(req)
 	if errResp != nil {

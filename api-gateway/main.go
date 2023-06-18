@@ -51,10 +51,10 @@ func main() {
 	logger.Debug().Msg("redis connected")
 
 	// * Initialize the Casbin Gorm adapter and the Casbin enforcer with the model
-	adapter, _ := gormadapter.NewAdapterByDB(sqlDB.Gorm)
 	if !config.Debug {
 		gormadapter.TurnOffAutoMigrate(sqlDB.Gorm)
 	}
+	adapter, _ := gormadapter.NewAdapterByDB(sqlDB.Gorm)
 	enforcer, errEnforcer := casbin.NewEnforcer("./model.conf", adapter)
 	if errEnforcer != nil {
 		logger.Fatal().Err(errEnforcer).Msg("enforcer failed")
@@ -89,17 +89,18 @@ func main() {
 	router.Use(middleware.Logger(logger))
 	router.Use(gin.Recovery())
 
-	router.GET("/ping", pingHandler.Ping)
 	if config.Debug {
-		router.POST("/shorten", shortenHandler.Shorten)
+		sGroup := router.Group("/s")
+		{
+			sGroup.GET("/ping", pingHandler.Ping)
+			sGroup.POST("/shorten", shortenHandler.Shorten)
+		}
 	}
-
-	short := router.Group("/v1")
 
 	// * 1. Paramater validation,
 	// * 6. Dynamic routing using path parameters,
 	// * 7. Service discovery using database,
-	short.Use(middleware.HashedURLConverter(shortenSvc))
+	router.Use(middleware.HashedURLConverter(shortenSvc))
 
 	// * 2. Allow-path
 	// allowedPaths := []string{
@@ -111,13 +112,13 @@ func main() {
 	// 	"login/cms",
 	// }
 	// * 3. Authentication
-	short.Use(middleware.AuthMiddleware(config.JWTSecretKey))
+	router.Use(middleware.AuthMiddleware(config.JWTSecretKey))
 	// * 4. Authorization
-	short.Use(middleware.AuthzMiddleware(enforcer))
+	router.Use(middleware.AuthzMiddleware(enforcer))
 
-	short.Use(requestid.New())
+	router.Use(requestid.New())
 	// * 5. Request counter
-	short.Use(middleware.RequestCounter(redisClient.Redis))
+	router.Use(middleware.RequestCounter(redisClient.Redis))
 
 	// * things outside my capabilities:
 	// * 2. Allow-list based on IPs
@@ -129,9 +130,7 @@ func main() {
 	// 	pprof.Register(short)
 	// }
 
-	{
-		short.Any("/:hash", shortenHandler.Get)
-	}
+	router.Any("/:hash", shortenHandler.Get)
 
 	srv := &http.Server{
 		Addr:         ":" + config.Port,

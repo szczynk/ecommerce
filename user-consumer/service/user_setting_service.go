@@ -15,6 +15,6 @@ func NewUserSettingService(repo repository.UserSettingRepositoryI) UserSettingSe
 	return svc
 }
 
-func (svc *UserSettingService) UpdateByUserID(userSetting *model.UserSetting) (*model.UserSetting, error) {
+func (svc *UserSettingService) UpdateByUserID(userSetting *model.UserSetting) error {
 	return svc.repo.UpdateByUserID(userSetting)
 }

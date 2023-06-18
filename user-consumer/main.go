@@ -28,21 +28,20 @@ func main() {
 	}
 	logger.Debug().Msg("db connected")
 
-	rmq, errRmq := rmq.NewRabbitMQ(config.RabbitMQ.URL)
+	// connect to rabbitmq using amqp091 and provide publish and subscribe function
+	rmqConn, errRmq := rmq.NewConn(config.RabbitMQ.URL)
 	if errRmq != nil {
 		logger.Fatal().Err(errRmq).Msg("rabbitmq failed to connect")
 	}
 	logger.Debug().Msg("rabbitmq connected")
 
 	defer func() {
-		errDBC := sqlDB.Close()
-		if errDBC != nil {
+		if errDBC := sqlDB.Close(); errDBC != nil {
 			logger.Fatal().Err(errDBC).Msg("db failed to closed")
 		}
 		logger.Debug().Msg("db closed")
 
-		errRmqC := rmq.Shutdown()
-		if errRmqC != nil {
+		if errRmqC := rmqConn.Close(); errRmqC != nil {
 			logger.Fatal().Err(errRmqC).Msg("rabbitmq failed to closed")
 		}
 		logger.Debug().Msg("rabbitmq closed")
@@ -50,18 +49,45 @@ func main() {
 
 	userRepo := repository.NewUserRepository(sqlDB.SQLDB)
 	userSvc := service.NewUserService(userRepo)
-	userHandler := handler.NewUserHandler(rmq, logger, userSvc)
+	userHandler := handler.NewUserHandler(rmqConn, logger, userSvc)
 
-	// Channel to listen for interrupt signal
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+	userSettingRepo := repository.NewUserSettingRepository(sqlDB.SQLDB)
+	userSettingSvc := service.NewUserSettingService(userSettingRepo)
+	userSettingHandler := handler.NewUserSettingHandler(rmqConn, logger, userSettingSvc)
 
-	userHandler.Create()
-	userHandler.UpdateByID()
+	uHCreateConsumer, errUHCCon := userHandler.Create()
+	if errUHCCon != nil {
+		logger.Fatal().Err(errUHCCon).Msg("uHCreateConsumer err")
+	}
+	logger.Debug().Msg("uHCreateConsumer created")
+	defer uHCreateConsumer.Close()
 
-	logger.Debug().Msg("[*] To exit press CTRL+C")
+	uHUpdateByIDConsumer, errUHUCon := userHandler.UpdateByID()
+	if errUHUCon != nil {
+		logger.Fatal().Err(errUHUCon).Msg("uHUpdateByIDConsumer err")
+	}
+	logger.Debug().Msg("uHUpdateByIDConsumer created")
+	defer uHUpdateByIDConsumer.Close()
 
-	// Wait for interrupt signal
-	<-quit
+	uSHUpdateByIDConsumer, errUSHUCon := userSettingHandler.UpdateByUserID()
+	if errUSHUCon != nil {
+		logger.Fatal().Err(errUSHUCon).Msg("uSHUpdateByIDConsumer err")
+	}
+	logger.Debug().Msg("uSHUpdateByIDConsumer created")
+	defer uSHUpdateByIDConsumer.Close()
+
+	// block main thread - wait for shutdown signal
+	sigs := make(chan os.Signal, 1)
+	done := make(chan bool, 1)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		sig := <-sigs
+		logger.Debug().Msgf("sig: %v", sig)
+		done <- true
+	}()
+
+	logger.Debug().Msg("awaiting signal...")
+	<-done
 	logger.Debug().Msg("user-consumer shutting down...")
 }

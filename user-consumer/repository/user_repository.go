@@ -18,13 +18,13 @@ func NewUserRepository(db *sql.DB) UserRepositoryI {
 	return repo
 }
 
-func (repo *UserRepository) Create(user *model.User) (*model.User, error) {
+func (repo *UserRepository) Create(user *model.User) error {
 	ctx, cancel := timeout.NewCtxTimeout()
 	defer cancel()
 
 	tx, errTx := repo.db.BeginTx(ctx, nil)
 	if errTx != nil {
-		return nil, errTx
+		return errTx
 	}
 
 	sqlQuery1 := `
@@ -34,7 +34,7 @@ func (repo *UserRepository) Create(user *model.User) (*model.User, error) {
 	`
 	stmt1, errStmt := tx.PrepareContext(ctx, sqlQuery1)
 	if errStmt != nil {
-		return nil, errStmt
+		return errStmt
 	}
 	defer stmt1.Close()
 
@@ -44,7 +44,7 @@ func (repo *UserRepository) Create(user *model.User) (*model.User, error) {
 	).
 		Scan(&user.ID)
 	if errScan != nil {
-		return nil, errScan
+		return errScan
 	}
 
 	sqlQuery2 := `
@@ -52,21 +52,21 @@ func (repo *UserRepository) Create(user *model.User) (*model.User, error) {
 	`
 	stmt2, errStmt2 := tx.PrepareContext(ctx, sqlQuery2)
 	if errStmt2 != nil {
-		return nil, errStmt2
+		return errStmt2
 	}
 	defer stmt2.Close()
 
 	_, errExec := stmt2.ExecContext(ctx, user.ID)
 	if errExec != nil {
-		return nil, errExec
+		return errExec
 	}
 
 	_ = tx.Commit()
 
-	return user, nil
+	return nil
 }
 
-func (repo *UserRepository) UpdateByID(user *model.User) (*model.User, error) {
+func (repo *UserRepository) UpdateByID(user *model.User) error {
 	// Prepare the SQL statement
 	var columns []string
 	var args []interface{}
@@ -97,7 +97,7 @@ func (repo *UserRepository) UpdateByID(user *model.User) (*model.User, error) {
 	}
 
 	if len(columns) == 0 {
-		return user, nil // no update needed
+		return nil // no update needed
 	}
 
 	// Append the user ID at the end
@@ -105,10 +105,10 @@ func (repo *UserRepository) UpdateByID(user *model.User) (*model.User, error) {
 	//nolint:gosec // hard to avoid this
 	query := fmt.Sprintf(
 		`
-	UPDATE users SET %s 
-	WHERE id = $%d 
-	RETURNING id, username, full_name, age, image_url 
-	`, strings.Join(columns, ", "), argPos,
+		UPDATE users SET %s 
+		WHERE id = $%d 
+		RETURNING id, username, full_name, age, image_url 
+		`, strings.Join(columns, ", "), argPos,
 	)
 
 	ctx, cancel := timeout.NewCtxTimeout()
@@ -116,7 +116,7 @@ func (repo *UserRepository) UpdateByID(user *model.User) (*model.User, error) {
 
 	stmt, errStmt2 := repo.db.PrepareContext(ctx, query)
 	if errStmt2 != nil {
-		return nil, errStmt2
+		return errStmt2
 	}
 	defer stmt.Close()
 
@@ -124,8 +124,8 @@ func (repo *UserRepository) UpdateByID(user *model.User) (*model.User, error) {
 		&user.ID, &user.Username, &user.FullName, &user.Age, &user.ImageURL,
 	)
 	if errScan != nil {
-		return nil, errScan
+		return errScan
 	}
 
-	return user, nil
+	return nil
 }

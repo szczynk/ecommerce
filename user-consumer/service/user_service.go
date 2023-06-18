@@ -15,10 +15,10 @@ func NewUserService(repo repository.UserRepositoryI) UserServiceI {
 	return svc
 }
 
-func (svc *UserService) Create(user *model.User) (*model.User, error) {
+func (svc *UserService) Create(user *model.User) error {
 	return svc.repo.Create(user)
 }
 
-func (svc *UserService) UpdateByID(user *model.User) (*model.User, error) {
+func (svc *UserService) UpdateByID(user *model.User) error {
 	return svc.repo.UpdateByID(user)
 }

@@ -6,7 +6,7 @@ import (
 )
 
 type AuthServiceI interface {
-	Create(registerReq *model.RegisterReq) (*model.User, error)
+	Create(registerReq *model.RegisterReq) error
 	FirstOrCreate(provider string, userReq *model.UserReq) (*model.User, error)
 	LoginByEmail(loginReq *model.LoginReq) (*model.User, error)
 

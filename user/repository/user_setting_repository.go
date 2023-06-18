@@ -4,104 +4,110 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"log"
 	"strconv"
 	"time"
 	"user-go/helper/timeout"
 	"user-go/model"
 	"user-go/package/rmq"
 
+	"github.com/avast/retry-go/v4"
 	"github.com/redis/go-redis/v9"
+	"github.com/wagslane/go-rabbitmq"
 )
 
 type UserSettingRepository struct {
-	db    *sql.DB
-	redis *redis.Client
-	rmq   rmq.RabbitMQClient
+	db      *sql.DB
+	redis   *redis.Client
+	rmqConn *rabbitmq.Conn
 }
 
-func NewUserSettingRepository(db *sql.DB, redis *redis.Client, rmq rmq.RabbitMQClient) UserSettingRepositoryI {
+func NewUserSettingRepository(db *sql.DB, redis *redis.Client, rmqConn *rabbitmq.Conn) UserSettingRepositoryI {
 	repo := new(UserSettingRepository)
 	repo.db = db
 	repo.redis = redis
-	repo.rmq = rmq
+	repo.rmqConn = rmqConn
 	return repo
 }
 
 func (repo *UserSettingRepository) UpdateByUserID(newSetting *model.UserSetting) (*model.User, error) {
 	userID := newSetting.UserID
 
-	errCache := repo.redis.Del(
+	errDelCache := repo.redis.Del(
 		context.Background(),
 		"user_id:"+strconv.FormatUint(uint64(userID), 10),
 	).Err()
-	if errCache != nil {
-		return nil, errCache
+	if errDelCache != nil {
+		return nil, errDelCache
 	}
 
 	ctx, cancel := timeout.NewCtxTimeout()
 	defer cancel()
 
-	newSettingBytes, errJSON := json.Marshal(newSetting)
-	if errJSON != nil {
-		return nil, errJSON
-	}
+	newSettingBytes, _ := json.Marshal(newSetting)
+	// if errJSON != nil {
+	// 	return nil, errJSON
+	// }
 
-	errPub := repo.rmq.Publish(
-		ctx,
-		"user_setting.updated",
-		"topic",
-		"application/json",
-		"user_setting.updated",
-		newSettingBytes,
+	errPub := rmq.PublishWithContext(
+		ctx, repo.rmqConn,
+		[]string{"user_setting.updated"}, "application/json",
+		true, newSettingBytes,
+		"", "",
+		"user_setting", "topic",
 	)
 	if errPub != nil {
 		return nil, errPub
 	}
 
-	time.Sleep(3 * time.Second)
-
-	return repo.getByID(userID)
-}
-
-func (repo *UserSettingRepository) getByID(userID uint) (*model.User, error) {
-	user := new(model.User)
-
-	cachedData, errGetCache := repo.getDataFromCache(
-		"user_id:" + strconv.FormatUint(uint64(userID), 10),
-	)
-	if errGetCache != nil {
-		data, errGetDB := repo.getByUserIDFromDatabase(userID)
-		if errGetDB != nil {
-			return nil, errGetDB
-		}
-
-		dataByte, errJSON := json.Marshal(data)
-		if errJSON != nil {
-			return nil, errJSON
-		}
-
-		// Store the data in the cache for future reads
-		errSetCache := repo.redis.Set(
-			context.Background(),
-			"user_id:"+strconv.FormatUint(uint64(userID), 10), dataByte, 10*time.Minute,
-		).Err()
-		if errSetCache != nil {
-			return nil, errSetCache
-		}
-
-		return data, nil
-	}
-
-	errJSONUn := json.Unmarshal([]byte(cachedData), &user)
-	if errJSONUn != nil {
-		return nil, errJSONUn
+	user, err := repo.retryGetByID(userID, 3, 3*time.Second)
+	if err != nil {
+		return nil, err
 	}
 
 	return user, nil
 }
 
-func (repo *UserSettingRepository) getDataFromCache(key string) (string, error) {
-	return repo.redis.Get(context.Background(), key).Result()
+func (repo *UserSettingRepository) getByID(userID uint) (*model.User, error) {
+	user := new(model.User)
+
+	cachedData, errGetCache := repo.redis.Get(
+		context.Background(),
+		"user_id:"+strconv.FormatUint(uint64(userID), 10),
+	).Bytes()
+	if errGetCache == nil {
+		errJSONUn := json.Unmarshal(cachedData, &user)
+		if errJSONUn != nil {
+			return nil, errJSONUn
+		}
+		return user, nil
+	}
+
+	if !errors.Is(errGetCache, redis.Nil) {
+		return nil, errGetCache
+	}
+
+	var errGetDB error
+	user, errGetDB = repo.getByUserIDFromDatabase(userID)
+	if errGetDB != nil {
+		return nil, errGetDB
+	}
+
+	dataByte, _ := json.Marshal(user)
+	// if errJSON != nil {
+	// 	return nil, errJSON
+	// }
+
+	errSetCache := repo.redis.Set(
+		context.Background(),
+		"user_id:"+strconv.FormatUint(uint64(userID), 10), dataByte, 10*time.Minute,
+	).Err()
+	if errSetCache != nil {
+		return nil, errSetCache
+	}
+
+	return user, nil
 }
 
 func (repo *UserSettingRepository) getByUserIDFromDatabase(userID uint) (*model.User, error) {
@@ -135,6 +141,33 @@ func (repo *UserSettingRepository) getByUserIDFromDatabase(userID uint) (*model.
 	)
 	if scanErr != nil {
 		return nil, scanErr
+	}
+
+	return user, nil
+}
+
+func (repo *UserSettingRepository) retryGetByID(userID uint, attempts uint, delay time.Duration) (*model.User, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var user *model.User
+	var err error
+
+	err = retry.Do(
+		func() error {
+			user, err = repo.getByID(userID)
+			return err
+		},
+		retry.Attempts(attempts),
+		retry.Delay(delay),
+		retry.OnRetry(func(n uint, err error) {
+			log.Printf("Attempt %d failed; retrying in %v", n, delay)
+		}),
+		retry.Context(ctx),
+	)
+
+	if err != nil {
+		return nil, err
 	}
 
 	return user, nil

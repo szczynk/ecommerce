@@ -26,7 +26,8 @@ func (svc *ShortenService) Create(shortenReq *model.ShortenReq) (*model.APIManag
 	url := shortenReq.EndpointURL
 
 	url = svc.shorten.EnforceHTTP(url)
-	hashedURL := svc.shorten.Encode(url)
+	// hashedURL := svc.shorten.Encode(url)
+	hashedURL := url
 	apiManagement := &model.APIManagement{
 		APIName:           shortenReq.APIName,
 		ServiceName:       shortenReq.ServiceName,

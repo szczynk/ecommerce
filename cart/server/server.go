@@ -1,12 +1,12 @@
 package server
 
 import (
+	"cart-go/helper/timeout"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	"cart-go/helper/timeout"
 
 	"github.com/rs/zerolog"
 )
@@ -20,13 +20,14 @@ func Run(srv *http.Server, logger *zerolog.Logger) error {
 		}
 	}()
 
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
 
 	select {
 	case err := <-errChan:
 		return err
-	case <-quit:
+	case sig := <-sigs:
+		logger.Debug().Msgf("sig: %v", sig)
 	}
 	logger.Debug().Msg("shutdown server...")
 

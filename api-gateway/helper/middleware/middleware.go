@@ -135,11 +135,9 @@ func HashedURLConverter(svc service.ShortenServiceI) gin.HandlerFunc {
 }
 
 // If path is the allowed, next to handler.
-func isAllowedPath(ctx *gin.Context) (string, string, bool) {
-	var uri string
-
+func isAllowedPath(ctx *gin.Context) (string, bool) {
 	urlCtx, _ := ctx.Get("url")
-	uri, _ = urlCtx.(string)
+	uri, _ := urlCtx.(string)
 
 	needBypassCtx, _ := ctx.Get("need_bypass")
 	needBypass, _ := needBypassCtx.(bool)
@@ -149,17 +147,16 @@ func isAllowedPath(ctx *gin.Context) (string, string, bool) {
 
 	if needBypass {
 		// Pass the real url and raw query into to handler
-		ctx.Set("url", uri)
 		ctx.Next()
-		return "", "", true
+		return "", true
 	}
-	return uri, path, false
+	return path, false
 }
 
 // AuthMiddleware validate jwt token.
 func AuthMiddleware(jwtSecretKey string) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		uri, path, shouldReturn := isAllowedPath(ctx)
+		path, shouldReturn := isAllowedPath(ctx)
 		if shouldReturn {
 			return
 		}
@@ -206,7 +203,6 @@ func AuthMiddleware(jwtSecretKey string) gin.HandlerFunc {
 		ctx.Set("userID", claims.UserID)
 		ctx.Set("userRole", claims.UserRole)
 		// Pass the real url, raw query, and path into to AuthzMiddleware
-		ctx.Set("url", uri)
 		ctx.Set("path", path)
 		ctx.Next()
 	}
@@ -215,18 +211,13 @@ func AuthMiddleware(jwtSecretKey string) gin.HandlerFunc {
 // AuthzMiddleware authorize request based on resource and role that have been setup.
 func AuthzMiddleware(enforcer *casbin.Enforcer) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		uri, path, shouldReturn := isAllowedPath(ctx)
+		path, shouldReturn := isAllowedPath(ctx)
 		if shouldReturn {
 			return
 		}
 
-		var userID string
-		userIDCtx, _ := ctx.Get("userID")
-		userID, _ = userIDCtx.(string)
-
-		var userRole string
 		userRoleCtx, _ := ctx.Get("userRole")
-		userRole, _ = userRoleCtx.(string)
+		userRole, _ := userRoleCtx.(string)
 
 		// Now check if the user has the necessary permissions
 		sub := userRole
@@ -259,9 +250,7 @@ func AuthzMiddleware(enforcer *casbin.Enforcer) gin.HandlerFunc {
 		}
 
 		// Pass the userID to handler
-		ctx.Set("userID", userID)
 		// Pass the real url and raw query into to handler
-		ctx.Set("url", uri)
 		ctx.Next()
 	}
 }

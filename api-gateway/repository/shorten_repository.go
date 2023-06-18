@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -27,37 +28,41 @@ func (repo *ShortenRepo) Get(hashedURL string) (*model.APIManagement, error) {
 	apiManagement := new(model.APIManagement)
 
 	// note: implemetation of cache aside of read cache strategy
-	cachedData, errGetCache := repo.getDataFromCache("hashed_path:" + hashedURL)
-	if errGetCache != nil {
-		data, errGetDB := repo.getHashURLFromDatabase(hashedURL)
-		if errGetDB != nil {
-			return nil, errGetDB
+	cachedData, errGetCache := repo.redis.Get(
+		context.Background(), "hashed_path:"+hashedURL,
+	).Bytes()
+	if errGetCache == nil {
+		errJSONUn := json.Unmarshal(cachedData, &apiManagement)
+		if errJSONUn != nil {
+			return nil, errJSONUn
 		}
-
-		dataByte, errJSON := json.Marshal(data)
-		if errJSON != nil {
-			return nil, errJSON
-		}
-
-		// Store the data in the cache for future reads
-		errSetCache := repo.redis.Set(context.Background(), "hashed_path:"+hashedURL, dataByte, 10*time.Minute).Err()
-		if errSetCache != nil {
-			return nil, errSetCache
-		}
-
-		return data, nil
+		return apiManagement, nil
 	}
 
-	errJSONUn := json.Unmarshal([]byte(cachedData), &apiManagement)
-	if errJSONUn != nil {
-		return nil, errJSONUn
+	if !errors.Is(errGetCache, redis.Nil) {
+		return nil, errGetCache
+	}
+
+	var errGetDB error
+	apiManagement, errGetDB = repo.getHashURLFromDatabase(hashedURL)
+	if errGetDB != nil {
+		return nil, errGetDB
+	}
+
+	dataByte, _ := json.Marshal(apiManagement)
+	// if errJSON != nil {
+	// 	return nil, errJSON
+	// }
+
+	errSetCache := repo.redis.Set(
+		context.Background(),
+		"hashed_path:"+hashedURL, dataByte, 10*time.Minute,
+	).Err()
+	if errSetCache != nil {
+		return nil, errSetCache
 	}
 
 	return apiManagement, nil
-}
-
-func (repo *ShortenRepo) getDataFromCache(key string) (string, error) {
-	return repo.redis.Get(context.Background(), key).Result()
 }
 
 func (repo *ShortenRepo) getHashURLFromDatabase(hashedURL string) (*model.APIManagement, error) {

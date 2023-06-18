@@ -2,92 +2,83 @@ package handler
 
 import (
 	"encoding/json"
+	"log"
 	"user-consumer-go/model"
 	"user-consumer-go/package/rmq"
 	"user-consumer-go/service"
 
-	"github.com/rabbitmq/amqp091-go"
 	"github.com/rs/zerolog"
+	"github.com/wagslane/go-rabbitmq"
 )
 
 type UserHandler struct {
-	rmq    rmq.RabbitMQClient
-	logger *zerolog.Logger
-	svc    service.UserServiceI
+	rmqConn *rabbitmq.Conn
+	logger  *zerolog.Logger
+	svc     service.UserServiceI
 }
 
-func NewUserHandler(rmq rmq.RabbitMQClient, logger *zerolog.Logger, svc service.UserServiceI) UserHandlerI {
+func NewUserHandler(rmqConn *rabbitmq.Conn, logger *zerolog.Logger, svc service.UserServiceI) UserHandlerI {
 	h := new(UserHandler)
-	h.rmq = rmq
+	h.rmqConn = rmqConn
 	h.logger = logger
 	h.svc = svc
 	return h
 }
 
-func (h *UserHandler) Create() {
-	msgs, errSub := h.rmq.Subscribe(
-		"user.created",
-		"topic",
-		"user.created",
-		"user.created",
-		false,
-		1,
-	)
-	if errSub != nil {
-		h.logger.Error().Err(errSub).Msg("rmq.Subscribe err")
-		return
-	}
+func (h *UserHandler) Create() (*rabbitmq.Consumer, error) {
+	return rmq.NewConsumer(
+		h.rmqConn,
+		func(d rabbitmq.Delivery) rabbitmq.Action {
+			log.Printf("consumed: %v", string(d.Body))
 
-	go func(deliveries <-chan amqp091.Delivery) {
-		newUser := new(model.User)
-		for d := range deliveries {
-			_ = json.Unmarshal(d.Body, &newUser)
+			newUser := new(model.User)
+			if errJSONUn := json.Unmarshal(d.Body, &newUser); errJSONUn != nil {
+				h.logger.Error().Err(errJSONUn).Msg("json unmarshal err")
+				return rabbitmq.NackDiscard
+			}
 
-			// h.logger.Debug().Msgf("%v", newUser)
-
-			user, ucErr := h.svc.Create(newUser)
+			ucErr := h.svc.Create(newUser)
 			if ucErr != nil {
 				h.logger.Error().Err(ucErr).Msg("svc.Create err")
-				// _ = d.Nack(false, false)
-				continue
+				return rabbitmq.NackDiscard
 			}
 
-			_ = d.Ack(false)
-			h.logger.Debug().Msgf("from %s, rmq.Sub success with id:%v", d.RoutingKey, user.ID)
-		}
-	}(msgs)
+			h.logger.Debug().Msgf("from %v, tag %v, success with id:%v", d.RoutingKey, d.DeliveryTag, newUser.ID)
+			// rabbitmq.Ack, rabbitmq.NackDiscard, rabbitmq.NackRequeue
+			return rabbitmq.Ack
+		},
+		"user.created", "user.created",
+		true, false,
+		0, 0,
+		"user", "topic", true,
+	)
 }
 
-func (h *UserHandler) UpdateByID() {
-	msgs, errSub := h.rmq.Subscribe(
-		"user.updated",
-		"topic",
-		"user.updated",
-		"user.updated",
-		false,
-		1,
-	)
-	if errSub != nil {
-		h.logger.Error().Err(errSub).Msg("rmq.Subscribe err")
-		return
-	}
+func (h *UserHandler) UpdateByID() (*rabbitmq.Consumer, error) {
+	return rmq.NewConsumer(
+		h.rmqConn,
+		func(d rabbitmq.Delivery) rabbitmq.Action {
+			log.Printf("consumed: %v", string(d.Body))
 
-	go func(deliveries <-chan amqp091.Delivery) {
-		newUser := new(model.User)
-		for d := range deliveries {
-			_ = json.Unmarshal(d.Body, &newUser)
-
-			// h.logger.Debug().Msgf("%v", newUser)
-
-			user, ucErr := h.svc.UpdateByID(newUser)
-			if ucErr != nil {
-				h.logger.Error().Err(ucErr).Msgf("svc.UpdateByID err: %v\n%v", newUser, user)
-				// _ = d.Nack(false, false)
-				continue
+			user := new(model.User)
+			if errJSONUn := json.Unmarshal(d.Body, &user); errJSONUn != nil {
+				h.logger.Error().Err(errJSONUn).Msg("json unmarshal err")
+				return rabbitmq.NackDiscard
 			}
 
-			_ = d.Ack(false)
-			h.logger.Debug().Msgf("from %s, rmq.Sub success with id:%v", d.RoutingKey, user.ID)
-		}
-	}(msgs)
+			ucErr := h.svc.UpdateByID(user)
+			if ucErr != nil {
+				h.logger.Error().Err(ucErr).Msg("svc.UpdateByID err")
+				return rabbitmq.NackDiscard
+			}
+
+			h.logger.Debug().Msgf("from %v, tag %v, success with id:%v", d.RoutingKey, d.DeliveryTag, user.ID)
+			// rabbitmq.Ack, rabbitmq.NackDiscard, rabbitmq.NackRequeue
+			return rabbitmq.Ack
+		},
+		"user.updated", "user.updated",
+		true, false,
+		0, 0,
+		"user", "topic", true,
+	)
 }

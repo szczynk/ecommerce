@@ -6,7 +6,7 @@ import (
 )
 
 type AuthRepositoryI interface {
-	Create(user *model.User) (*model.User, error)
+	Create(user *model.User) error
 	LoginByEmail(email string) (*model.User, error)
 	FirstOrCreate(user *model.User) (*model.User, error)
 

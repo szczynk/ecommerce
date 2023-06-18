@@ -20,6 +20,7 @@ import (
 	"golang.org/x/oauth2/google"
 )
 
+//nolint:funlen // hard to avoid
 func main() {
 	// load config from .env using viper
 	config, errConf := config.LoadConfig()
@@ -48,8 +49,8 @@ func main() {
 	}
 	logger.Debug().Msg("redis connected")
 
-	// connect to rabbitmq using amqp091 and provide publish and subscribe method
-	rmq, errRmq := rmq.NewRabbitMQ(config.RabbitMQ.URL)
+	// connect to rabbitmq using amqp091 and provide publish and subscribe function
+	rmqConn, errRmq := rmq.NewConn(config.RabbitMQ.URL)
 	if errRmq != nil {
 		logger.Fatal().Err(errRmq).Msg("rabbitmq failed to connect")
 	}
@@ -67,7 +68,7 @@ func main() {
 		}
 		logger.Debug().Msg("redis closed")
 
-		if errRmqC := rmq.Shutdown(); errRmqC != nil {
+		if errRmqC := rmqConn.Close(); errRmqC != nil {
 			logger.Fatal().Err(errRmqC).Msg("rabbitmq failed to closed")
 		}
 		logger.Debug().Msg("rabbitmq closed")
@@ -85,7 +86,7 @@ func main() {
 		Endpoint: google.Endpoint,
 	}
 
-	authRepo := repository.NewAuthRepository(sqlDB.SQLDB, redisClient.Redis, rmq)
+	authRepo := repository.NewAuthRepository(sqlDB.SQLDB, redisClient.Redis, rmqConn)
 	authSvc := service.NewAuthService(authRepo)
 	authHandler := handler.NewAuthHandler(authSvc, config.JWTSecretKey, gauth)
 

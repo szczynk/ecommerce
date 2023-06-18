@@ -42,37 +42,35 @@ func main() {
 	}
 	logger.Debug().Msg("redis connected")
 
-	rmq, errRmq := rmq.NewRabbitMQ(config.RabbitMQ.URL)
+	// connect to rabbitmq using amqp091 and provide publish and subscribe function
+	rmqConn, errRmq := rmq.NewConn(config.RabbitMQ.URL)
 	if errRmq != nil {
 		logger.Fatal().Err(errRmq).Msg("rabbitmq failed to connect")
 	}
 	logger.Debug().Msg("rabbitmq connected")
 
 	defer func() {
-		errDBC := sqlDB.Close()
-		if errDBC != nil {
+		if errDBC := sqlDB.Close(); errDBC != nil {
 			logger.Fatal().Err(errDBC).Msg("db failed to closed")
 		}
 		logger.Debug().Msg("db closed")
 
-		errRedisC := redisClient.Close()
-		if errRedisC != nil {
+		if errRedisC := redisClient.Close(); errRedisC != nil {
 			logger.Fatal().Err(errRedisC).Msg("redis failed to closed")
 		}
 		logger.Debug().Msg("redis closed")
 
-		errRmqC := rmq.Shutdown()
-		if errRmqC != nil {
+		if errRmqC := rmqConn.Close(); errRmqC != nil {
 			logger.Fatal().Err(errRmqC).Msg("rabbitmq failed to closed")
 		}
 		logger.Debug().Msg("rabbitmq closed")
 	}()
 
-	userRepo := repository.NewUserRepository(sqlDB.SQLDB, redisClient.Redis, rmq)
+	userRepo := repository.NewUserRepository(sqlDB.SQLDB, redisClient.Redis, rmqConn)
 	userSvc := service.NewUserService(userRepo)
 	userHandler := handler.NewUserHandler(userSvc)
 
-	userSettingRepo := repository.NewUserSettingRepository(sqlDB.SQLDB, redisClient.Redis, rmq)
+	userSettingRepo := repository.NewUserSettingRepository(sqlDB.SQLDB, redisClient.Redis, rmqConn)
 	userSettingSvc := service.NewUserSettingService(userSettingRepo)
 	userSettingHandler := handler.NewUserSettingHandler(userSettingSvc)
 

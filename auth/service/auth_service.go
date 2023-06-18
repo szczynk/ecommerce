@@ -18,10 +18,10 @@ func NewAuthService(repo repository.AuthRepositoryI) AuthServiceI {
 	return svc
 }
 
-func (svc *AuthService) Create(registerReq *model.RegisterReq) (*model.User, error) {
+func (svc *AuthService) Create(registerReq *model.RegisterReq) error {
 	hashedPassword, errHash := authjwt.HashPassword(registerReq.Password)
 	if errHash != nil {
-		return nil, errHash
+		return errHash
 	}
 
 	newUser := &model.User{

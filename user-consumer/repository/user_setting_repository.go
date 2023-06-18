@@ -18,7 +18,7 @@ func NewUserSettingRepository(db *sql.DB) UserSettingRepositoryI {
 	return repo
 }
 
-func (repo *UserSettingRepository) UpdateByUserID(setting *model.UserSetting) (*model.UserSetting, error) {
+func (repo *UserSettingRepository) UpdateByUserID(setting *model.UserSetting) error {
 	// Prepare the SQL statement
 	var columns []string
 	var args []interface{}
@@ -43,11 +43,11 @@ func (repo *UserSettingRepository) UpdateByUserID(setting *model.UserSetting) (*
 	}
 
 	if len(columns) == 0 {
-		return setting, nil // no update needed
+		return nil // no update needed
 	}
 
 	// Append the user ID at the end
-	args = append(args, setting.ID)
+	args = append(args, setting.UserID)
 	//nolint:gosec // hard to avoid this
 	query := fmt.Sprintf(
 		`
@@ -60,9 +60,9 @@ func (repo *UserSettingRepository) UpdateByUserID(setting *model.UserSetting) (*
 	ctx, cancel := timeout.NewCtxTimeout()
 	defer cancel()
 
-	stmt, errStmt2 := repo.db.PrepareContext(ctx, query)
-	if errStmt2 != nil {
-		return nil, errStmt2
+	stmt, errStmt := repo.db.PrepareContext(ctx, query)
+	if errStmt != nil {
+		return errStmt
 	}
 	defer stmt.Close()
 
@@ -70,8 +70,8 @@ func (repo *UserSettingRepository) UpdateByUserID(setting *model.UserSetting) (*
 		&setting.ID, &setting.UserID, &setting.Notification, &setting.DarkMode, &setting.LanguageID,
 	)
 	if errScan != nil {
-		return nil, errScan
+		return errScan
 	}
 
-	return setting, nil
+	return nil
 }

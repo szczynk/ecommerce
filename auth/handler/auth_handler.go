@@ -40,7 +40,7 @@ func (h *AuthHandler) Register(ctx *gin.Context) {
 		return
 	}
 
-	user, errSvc := h.svc.Create(registerReq)
+	errSvc := h.svc.Create(registerReq)
 	if errSvc != nil {
 		if strings.Contains(errSvc.Error(), "duplicated key not allowed") {
 			response.NewJSONResErr(ctx, http.StatusConflict, "", "email already existed")
@@ -51,7 +51,7 @@ func (h *AuthHandler) Register(ctx *gin.Context) {
 		return
 	}
 
-	response.NewJSONRes(ctx, http.StatusCreated, "", user.ID)
+	response.NewJSONRes(ctx, http.StatusCreated, "success", nil)
 }
 
 func (h *AuthHandler) Login(ctx *gin.Context) {

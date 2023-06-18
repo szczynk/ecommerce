@@ -3,14 +3,14 @@ module user-go
 go 1.20
 
 require (
-	github.com/DATA-DOG/go-sqlmock v1.5.0
+	github.com/avast/retry-go/v4 v4.3.4
 	github.com/gin-gonic/gin v1.9.0
-	github.com/go-redis/redismock/v9 v9.0.3
 	github.com/rabbitmq/amqp091-go v1.8.1
 	github.com/redis/go-redis/v9 v9.0.5
 	github.com/rs/zerolog v1.29.1
 	github.com/spf13/viper v1.15.0
-	github.com/stretchr/testify v1.8.1
+	github.com/stretchr/testify v1.8.2
+	github.com/wagslane/go-rabbitmq v0.12.3
 	gorm.io/driver/postgres v1.5.2
 	gorm.io/gorm v1.25.1
 )

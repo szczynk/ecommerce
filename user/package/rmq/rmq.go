@@ -3,98 +3,95 @@ package rmq
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"sync"
+	"log"
 
-	"github.com/rabbitmq/amqp091-go"
+	"github.com/wagslane/go-rabbitmq"
 )
 
-type Response struct {
-	*sync.RWMutex
-	Map map[string]chan string
-}
-
-type RabbitMQClient interface {
-	Publish(ctx context.Context, exchangeName, exchangeType, contentType, routingKeyPub string, dataBytes []byte) error
-	Subscribe(
-		exchangeName, exchangeType, queueName, routingKeyCon string,
-		autoAck bool,
-		prefetchCount int,
-	) (<-chan amqp091.Delivery, error)
-	ConnClose() error
-	ChClose() error
-	Shutdown() error
-}
-
-type RabbitMQ struct {
-	url  string
-	Conn *amqp091.Connection
-	Ch   *amqp091.Channel
-	done chan bool
-}
-
-func NewRabbitMQ(url string) (RabbitMQClient, error) {
-	if url == "" {
-		return nil, errors.New("no rabbitmq url")
-	}
-
-	rmq := new(RabbitMQ)
-	rmq.url = url
-	rmq.done = make(chan bool)
-
-	err := rmq.init()
-	if err != nil {
-		return nil, err
-	}
-
-	return rmq, nil
-}
-
-func (r *RabbitMQ) init() error {
-	conn, errConn := amqp091.Dial(r.url)
-	if errConn != nil {
-		return fmt.Errorf("failed to connect to rabbitmq: %w", errConn)
-	}
-
-	ch, errCh := conn.Channel()
-	if errCh != nil {
-		return fmt.Errorf("failed to open a channel: %w", errCh)
-	}
-
-	r.Conn = conn
-	r.Ch = ch
-	return nil
-}
-
-func (r *RabbitMQ) Publish(
-	ctx context.Context,
-	exchangeName, exchangeType, contentType, routingKeyPub string,
-	dataBytes []byte,
-) error {
-	errExc := r.Ch.ExchangeDeclare(
-		exchangeName, // exchange name
-		exchangeType, // type
-		true,         // durable
-		false,        // auto-deleted
-		false,        // internal
-		false,        // no-wait
-		nil,          // arguments
+func NewConn(url string) (*rabbitmq.Conn, error) {
+	return rabbitmq.NewConn(
+		url,
+		rabbitmq.WithConnectionOptionsLogging,
 	)
-	if errExc != nil {
-		return errExc
+}
+
+func NewPublisher(
+	conn *rabbitmq.Conn,
+	exchangeName, exchangeType string, exchangeDeclare bool,
+) (*rabbitmq.Publisher, error) {
+	opt := []func(*rabbitmq.PublisherOptions){
+		rabbitmq.WithPublisherOptionsLogging,
 	}
 
-	errPub := r.Ch.PublishWithContext(
+	if exchangeName != "" {
+		opt = append(opt, rabbitmq.WithPublisherOptionsExchangeName(exchangeName))
+	}
+
+	if exchangeType != "" {
+		opt = append(opt, rabbitmq.WithPublisherOptionsExchangeKind(exchangeType))
+	}
+
+	if exchangeDeclare {
+		opt = append(opt, rabbitmq.WithPublisherOptionsExchangeDeclare)
+	}
+
+	publisher, errNewPub := rabbitmq.NewPublisher(
+		conn,
+		opt...,
+	)
+	if errNewPub != nil {
+		return nil, errNewPub
+	}
+
+	return publisher, nil
+}
+
+func PublishWithContext(
+	ctx context.Context, conn *rabbitmq.Conn,
+	routingKeysPub []string,
+	contentType string,
+	persistent bool, dataBytes []byte,
+	correlationID, replyTo string,
+	exchangeName, exchangeType string,
+) error {
+	publisher, errNewPub := NewPublisher(conn, exchangeName, exchangeType, false)
+	if errNewPub != nil {
+		return errNewPub
+	}
+	defer publisher.Close()
+
+	publisher.NotifyPublish(func(c rabbitmq.Confirmation) {
+		log.Printf("message confirmed from server. tag: %v, ack: %v", c.DeliveryTag, c.Ack)
+	})
+
+	opt := []func(*rabbitmq.PublishOptions){}
+
+	if contentType != "" {
+		opt = append(opt, rabbitmq.WithPublishOptionsContentType(contentType))
+	}
+
+	if persistent {
+		opt = append(opt, rabbitmq.WithPublishOptionsPersistentDelivery)
+	}
+
+	if correlationID != "" {
+		opt = append(opt, rabbitmq.WithPublishOptionsCorrelationID(correlationID))
+	}
+
+	if replyTo != "" {
+		opt = append(opt, rabbitmq.WithPublishOptionsReplyTo(replyTo))
+	}
+
+	if exchangeName != "" {
+		opt = append(opt, rabbitmq.WithPublishOptionsExchange(exchangeName))
+	}
+
+	errPub := publisher.PublishWithContext(
 		ctx,
-		exchangeName,  // exchange name
-		routingKeyPub, // routing key
-		false,         // mandatory
-		false,         // immediate
-		amqp091.Publishing{
-			ContentType: contentType,
-			Body:        dataBytes,
-		})
+		dataBytes,
+		routingKeysPub,
+		opt...,
+	)
 	if errPub != nil {
 		return errPub
 	}
@@ -102,88 +99,54 @@ func (r *RabbitMQ) Publish(
 	return nil
 }
 
-func (r *RabbitMQ) Subscribe(
-	exchangeName, exchangeType, queueName, routingKeyCon string,
-	autoAck bool,
-	prefetchCount int,
-) (<-chan amqp091.Delivery, error) {
-	errExc := r.Ch.ExchangeDeclare(
-		exchangeName, // exchange name
-		exchangeType, // type
-		true,         // durable
-		false,        // auto-deleted
-		false,        // internal
-		false,        // no-wait
-		nil,          // arguments
+func NewConsumer(
+	conn *rabbitmq.Conn,
+	handler rabbitmq.Handler,
+	queueName, routingKeyCon string,
+	queueDurable, autoAck bool,
+	concurrency, prefetchCount int,
+	exchangeName, exchangeType string, exchangeDeclare bool,
+) (*rabbitmq.Consumer, error) {
+	opt := []func(*rabbitmq.ConsumerOptions){
+		rabbitmq.WithConsumerOptionsLogging,
+	}
+
+	if routingKeyCon != "" {
+		opt = append(opt, rabbitmq.WithConsumerOptionsRoutingKey(routingKeyCon))
+	}
+
+	if queueDurable {
+		opt = append(opt, rabbitmq.WithConsumerOptionsQueueDurable)
+	}
+
+	if autoAck {
+		opt = append(opt, rabbitmq.WithConsumerOptionsConsumerAutoAck(autoAck))
+	}
+
+	if concurrency != 0 {
+		opt = append(opt, rabbitmq.WithConsumerOptionsConcurrency(concurrency))
+	}
+
+	if prefetchCount != 0 {
+		opt = append(opt, rabbitmq.WithConsumerOptionsQOSPrefetch(prefetchCount))
+	}
+
+	if exchangeName != "" {
+		opt = append(opt, rabbitmq.WithConsumerOptionsExchangeName(exchangeName))
+	}
+
+	if exchangeType != "" {
+		opt = append(opt, rabbitmq.WithConsumerOptionsExchangeKind(exchangeType))
+	}
+
+	if exchangeDeclare {
+		opt = append(opt, rabbitmq.WithConsumerOptionsExchangeDeclare)
+	}
+
+	return rabbitmq.NewConsumer(
+		conn,
+		handler,
+		queueName,
+		opt...,
 	)
-	if errExc != nil {
-		return nil, errExc
-	}
-
-	q, errQ := r.Ch.QueueDeclare(
-		queueName, // queue name
-		true,      // durable
-		false,     // delete when unused
-		false,     // exclusive
-		false,     // no-wait
-		nil,       // arguments
-	)
-	if errQ != nil {
-		return nil, errQ
-	}
-
-	errQB := r.Ch.QueueBind(
-		q.Name,        // queue name
-		routingKeyCon, // routing key
-		exchangeName,  // exchange
-		false,         // no-wait
-		nil,           // arguments
-	)
-	if errQB != nil {
-		return nil, errQB
-	}
-
-	errQos := r.Ch.Qos(
-		prefetchCount, // prefetch count
-		0,             // prefetch size
-		false,         // global
-	)
-	if errQos != nil {
-		return nil, errQos
-	}
-
-	msgs, errCon := r.Ch.Consume(
-		q.Name,  // queue name
-		"",      // consumer tag
-		autoAck, // auto-ack
-		false,   // exclusive
-		false,   // no-local
-		false,   // no-wait
-		nil,     // args
-	)
-	if errCon != nil {
-		return nil, errCon
-	}
-	return msgs, nil
-}
-
-func (r *RabbitMQ) ConnClose() error {
-	return r.Conn.Close()
-}
-
-func (r *RabbitMQ) ChClose() error {
-	return r.Ch.Close()
-}
-
-func (r *RabbitMQ) Shutdown() error {
-	if err := r.ChClose(); err != nil {
-		return err
-	}
-	if err := r.ConnClose(); err != nil {
-		return err
-	}
-
-	close(r.done)
-
-	return nil
 }
